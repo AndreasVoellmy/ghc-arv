@@ -271,6 +271,7 @@ initCapability( Capability *cap, nat i )
     cap->context_switch = 0;
     cap->avg_run_queue_len = 0;
     cap->pinned_object_block = NULL;
+    cap->pinned_object_blocks = NULL;
 
 #ifdef PROFILING
     cap->r.rCCCS = CCS_SYSTEM;
