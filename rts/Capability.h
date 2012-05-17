@@ -75,6 +75,7 @@ struct Capability_ {
     // Context switch flag.  When non-zero, this means: stop running
     // Haskell code, and switch threads.
     int context_switch;
+    double avg_run_queue_len;
 
     // Interrupt flag.  Like the context_switch flag, this also
     // indicates that we should stop running Haskell code, but we do
@@ -101,6 +102,7 @@ struct Capability_ {
     // check whether it is NULL without taking the lock, however.
     Task *returning_tasks_hd; // Singly-linked, with head/tail
     Task *returning_tasks_tl;
+    
 
     // Messages, or END_TSO_QUEUE.
     Message *inbox;

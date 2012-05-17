@@ -674,7 +674,7 @@ scheduleYield (Capability **pcap, Task *task)
  * Push work to other Capabilities if we have some.
  * -------------------------------------------------------------------------- */
 
-#if defined(THREADED_RTS)
+
 inline int
 runQueueLength(Capability *cap);
 
@@ -685,8 +685,20 @@ runQueueLength(Capability *cap) {
   for (tso = cap->run_queue_hd; tso != END_TSO_QUEUE; i++, tso = tso->_link);
   return i;
 }
-#endif 
 
+#define SMOOTHING_FACTOR 0.1
+
+#if defined(THREADED_RTS)
+inline void 
+updateRunningAverage(Capability *cap);
+
+inline void
+updateRunningAverage(Capability *cap) 
+{
+  cap->avg_run_queue_len = ((1-SMOOTHING_FACTOR) * cap->avg_run_queue_len + SMOOTHING_FACTOR * ((double) runQueueLength(cap)));
+  return;
+}
+#endif
 
 static void
 schedulePushWork(Capability *cap USED_IF_THREADS, 
@@ -716,23 +728,33 @@ schedulePushWork(Capability *cap USED_IF_THREADS,
       return;
     }
     */
+    // cap->avg_run_queue_len = ((1-SMOOTHING_FACTOR_1) * cap->avg_run_queue_len + SMOOTHING_FACTOR_1 * ((double) runQueueLength(cap)));
 
+    updateRunningAverage(cap);
     // First grab as many free Capabilities as we can.
     for (i=0, n_free_caps=0; i < n_capabilities; i++) {
 	cap0 = &capabilities[i];
-	if (cap != cap0 && tryGrabCapability(cap0,task)) {
+	if (cap != cap0 && 
+	    (abs(cap->avg_run_queue_len - cap0->avg_run_queue_len)) >= 2 &&
+	    tryGrabCapability(cap0,task)) {
+	    // cap0 is free, so we can safely look at its run queue and update the average run queue length.
+	    // In fact it is important that we do so, since if it has no work to do, it won't update its own for a while.
+	    // cap0->avg_run_queue_len = (cap0->avg_run_queue_len + (double) runQueueLength(cap0)) / 2;
+	    //cap0->avg_run_queue_len = ((1-SMOOTHING_FACTOR_2) * cap0->avg_run_queue_len + SMOOTHING_FACTOR_2 * ((double) runQueueLength(cap0)));
+	    updateRunningAverage(cap0);
 	    if (!emptyRunQueue(cap0)
-                || cap->returning_tasks_hd != NULL
-                || cap->inbox != (Message*)END_TSO_QUEUE) {
+                || cap0->returning_tasks_hd != NULL
+                || cap0->inbox != (Message*)END_TSO_QUEUE) {
 		// it already has some work, we just grabbed it at 
 		// the wrong moment.  Or maybe it's deadlocked!
 		releaseCapability(cap0);
 	    } else {
+	      printf("cap %d avg run queue len %f\n", i, cap0->avg_run_queue_len);
 		free_caps[n_free_caps++] = cap0;
 	    }
 	}
     }
-    
+
 
     // we now have n_free_caps free capabilities stashed in
     // free_caps[].  Share our run queue equally with them.  This is
