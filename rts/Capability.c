@@ -269,6 +269,7 @@ initCapability( Capability *cap, nat i )
     cap->free_trec_headers = NO_TREC;
     cap->transaction_tokens = 0;
     cap->context_switch = 0;
+    cap->avg_run_queue_len = 0;
     cap->pinned_object_block = NULL;
 
 #ifdef PROFILING
