@@ -674,6 +674,20 @@ scheduleYield (Capability **pcap, Task *task)
  * Push work to other Capabilities if we have some.
  * -------------------------------------------------------------------------- */
 
+#if defined(THREADED_RTS)
+inline int
+runQueueLength(Capability *cap);
+
+inline int
+runQueueLength(Capability *cap) {
+  int i = 0;
+  StgTSO *tso = cap->run_queue_hd;
+  for (tso = cap->run_queue_hd; tso != END_TSO_QUEUE; i++, tso = tso->_link);
+  return i;
+}
+#endif 
+
+
 static void
 schedulePushWork(Capability *cap USED_IF_THREADS, 
 		 Task *task      USED_IF_THREADS)
@@ -697,6 +711,12 @@ schedulePushWork(Capability *cap USED_IF_THREADS,
             sparkPoolSizeCap(cap) < 1) return;
     }
 
+    /*
+    if (runQueueLength(cap) < 5) {
+      return;
+    }
+    */
+
     // First grab as many free Capabilities as we can.
     for (i=0, n_free_caps=0; i < n_capabilities; i++) {
 	cap0 = &capabilities[i];
@@ -712,6 +732,7 @@ schedulePushWork(Capability *cap USED_IF_THREADS,
 	    }
 	}
     }
+    
 
     // we now have n_free_caps free capabilities stashed in
     // free_caps[].  Share our run queue equally with them.  This is
@@ -1181,7 +1202,7 @@ scheduleHandleYield( Capability *cap, StgTSO *t, nat prev_what_next )
         cap->context_switch = 0;
         appendToRunQueue(cap,t);
     } else {
-        pushOnRunQueue(cap,t);
+      appendToRunQueue(cap,t); // pushOnRunQueue(cap,t);
     }
 
     IF_DEBUG(sanity,
