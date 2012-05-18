@@ -676,27 +676,33 @@ scheduleYield (Capability **pcap, Task *task)
 
 
 inline int
-runQueueLength(Capability *cap);
+unLockedRunQueueLength(Capability *cap);
 
 inline int
-runQueueLength(Capability *cap) {
+unLockedRunQueueLength(Capability *cap) {
   int i = 0;
   StgTSO *tso = cap->run_queue_hd;
-  for (tso = cap->run_queue_hd; tso != END_TSO_QUEUE; i++, tso = tso->_link);
+  for (tso = cap->run_queue_hd; tso != END_TSO_QUEUE; tso = tso->_link) {
+    if (!tsoLocked(tso)) {
+      i++;
+    }
+  }
   return i;
 }
+
 
 #define SMOOTHING_FACTOR 0.1
 
 #if defined(THREADED_RTS)
-inline void 
+inline int 
 updateRunningAverage(Capability *cap);
 
-inline void
+inline int
 updateRunningAverage(Capability *cap) 
 {
-  cap->avg_run_queue_len = ((1-SMOOTHING_FACTOR) * cap->avg_run_queue_len + SMOOTHING_FACTOR * ((double) runQueueLength(cap)));
-  return;
+  int len = unLockedRunQueueLength(cap);
+  cap->avg_run_queue_len = ((1-SMOOTHING_FACTOR) * cap->avg_run_queue_len + SMOOTHING_FACTOR * ((double) len));
+  return len;
 }
 #endif
 
@@ -714,43 +720,45 @@ schedulePushWork(Capability *cap USED_IF_THREADS,
     // migration can be turned off with +RTS -qm
     if (!RtsFlags.ParFlags.migrate) return;
 
+    int cap_unbounded_rq_len = updateRunningAverage(cap); 
+#ifdef TRACING
+    char temp_str[200];
+    snprintf(&temp_str[0], 200, "cap %d qlen %d, avg qlen %f\n", cap->no, runQueueLength(cap), cap->avg_run_queue_len);
+    traceUserMsg(cap, &temp_str);
+#endif
+
     // Check whether we have more threads on our run queue, or sparks
     // in our pool, that we could hand to another Capability.
-    if (cap->run_queue_hd == END_TSO_QUEUE) {
+    if (cap_unbounded_rq_len==0) {
         if (sparkPoolSizeCap(cap) < 2) return;
     } else {
-        if (cap->run_queue_hd->_link == END_TSO_QUEUE &&
+        if (cap_unbounded_rq_len==1 &&
             sparkPoolSizeCap(cap) < 1) return;
     }
-
     /*
     if (runQueueLength(cap) < 5) {
       return;
     }
     */
-    // cap->avg_run_queue_len = ((1-SMOOTHING_FACTOR_1) * cap->avg_run_queue_len + SMOOTHING_FACTOR_1 * ((double) runQueueLength(cap)));
-
-    updateRunningAverage(cap);
     // First grab as many free Capabilities as we can.
     for (i=0, n_free_caps=0; i < n_capabilities; i++) {
 	cap0 = &capabilities[i];
-	if (cap != cap0 && 
-	    (abs(cap->avg_run_queue_len - cap0->avg_run_queue_len)) >= 2 &&
-	    tryGrabCapability(cap0,task)) {
-	    // cap0 is free, so we can safely look at its run queue and update the average run queue length.
-	    // In fact it is important that we do so, since if it has no work to do, it won't update its own for a while.
-	    // cap0->avg_run_queue_len = (cap0->avg_run_queue_len + (double) runQueueLength(cap0)) / 2;
-	    //cap0->avg_run_queue_len = ((1-SMOOTHING_FACTOR_2) * cap0->avg_run_queue_len + SMOOTHING_FACTOR_2 * ((double) runQueueLength(cap0)));
+	if (cap != cap0 && tryGrabCapability(cap0,task)) {
+	  // cap0 is free, so we can safely look at its run queue 
+	  // and update its average run queue length.
+	  // In fact it is important that we do so, 
+	  // since if it has no work to do, 
+	  // it won't update its own count.
 	    updateRunningAverage(cap0);
 	    if (!emptyRunQueue(cap0)
+		|| (cap->avg_run_queue_len - cap0->avg_run_queue_len) < 2
                 || cap0->returning_tasks_hd != NULL
                 || cap0->inbox != (Message*)END_TSO_QUEUE) {
 		// it already has some work, we just grabbed it at 
 		// the wrong moment.  Or maybe it's deadlocked!
 		releaseCapability(cap0);
 	    } else {
-	      printf("cap %d avg run queue len %f\n", i, cap0->avg_run_queue_len);
-		free_caps[n_free_caps++] = cap0;
+	      free_caps[n_free_caps++] = cap0;
 	    }
 	}
     }
