@@ -694,6 +694,56 @@ unLockedRunQueueLength(Capability *cap) {
 #define SMOOTHING_FACTOR 0.1
 
 #if defined(THREADED_RTS)
+
+inline void
+exchange(Capability *cap1, Capability *cap2, int num_to_move, Task *task);
+
+inline void
+exchange(Capability *cap1, Capability *cap2, int num_to_move, Task *task) {
+  StgTSO *prev, *t, *next;
+  int i;
+  int num_to_move_2 = abs(num_to_move);
+  Capability *capFrom, *capTo;
+
+  if (num_to_move > 0) {
+    capFrom = cap1;
+    capTo = cap2;
+  } else {
+    capFrom = cap2;
+    capTo = cap1;
+  }
+
+  if (capFrom->run_queue_hd != END_TSO_QUEUE) {
+    prev = capFrom->run_queue_hd;
+    t = prev->_link;
+    prev->_link = END_TSO_QUEUE;
+    for (i=0; t != END_TSO_QUEUE && i < num_to_move_2; t = next) {
+      next = t->_link;
+      t->_link = END_TSO_QUEUE;
+      if (t->bound == task->incall // don't move my bound thread
+	  || tsoLocked(t)) {  // don't move a locked thread
+	setTSOLink(capFrom, prev, t);
+	setTSOPrev(capFrom, t, prev);
+	prev = t;
+      } else {
+	appendToRunQueue(capTo,t);
+	traceEventMigrateThread (capFrom, t, capTo->no);
+	if (t->bound) { t->bound->task->cap = capTo; }
+	t->cap = capTo;
+	i++;
+      }
+    }
+    
+    if (t==END_TSO_QUEUE) {
+      capFrom->run_queue_tl = prev;
+    } else {
+      setTSOLink(capFrom, prev, next);
+      setTSOPrev(capFrom, next, prev);
+    }
+    IF_DEBUG(sanity, checkRunQueue(capFrom));
+  }
+}
+
 inline int 
 updateRunningAverage(Capability *cap);
 
@@ -723,8 +773,8 @@ schedulePushWork(Capability *cap USED_IF_THREADS,
     int cap_unbounded_rq_len = updateRunningAverage(cap); 
 #ifdef TRACING
     char temp_str[200];
-    snprintf(&temp_str[0], 200, "cap %d qlen %d, avg qlen %f\n", cap->no, runQueueLength(cap), cap->avg_run_queue_len);
-    traceUserMsg(cap, &temp_str);
+    snprintf(&temp_str[0], 200, "cap %d qlen %d, avg qlen %f\n", cap->no, cap_unbounded_rq_len, cap->avg_run_queue_len);
+    traceUserMsg(cap, &temp_str[0]);
 #endif
 
     // Check whether we have more threads on our run queue, or sparks
@@ -740,18 +790,35 @@ schedulePushWork(Capability *cap USED_IF_THREADS,
       return;
     }
     */
+    /*
+
+    for (i=0; i < n_capabilities; i++) {
+      cap0 = &capabilities[i];
+      __builtin_prefetch (&(cap0->running_task), 1, 1);
+      __builtin_prefetch (&(cap0->lock), 1, 1);
+      __builtin_prefetch (&(cap0->avg_run_queue_len), 1, 1);
+      __builtin_prefetch (&(cap0->returning_tasks_hd), 1, 1);
+      __builtin_prefetch (&(cap0->inbox), 1, 1);
+    }
+    */
     // First grab as many free Capabilities as we can.
+    int num_to_move = 0;
     for (i=0, n_free_caps=0; i < n_capabilities; i++) {
 	cap0 = &capabilities[i];
-	if (cap != cap0 && tryGrabCapability(cap0,task)) {
+	if (cap != cap0 && tryGrabCapability(cap0,task)) { 
 	  // cap0 is free, so we can safely look at its run queue 
 	  // and update its average run queue length.
 	  // In fact it is important that we do so, 
 	  // since if it has no work to do, 
 	  // it won't update its own count.
-	    updateRunningAverage(cap0);
+	    cap_unbounded_rq_len = updateRunningAverage(cap0);
+#ifdef TRACING
+	    snprintf(&temp_str[0], 200, "cap0 %d qlen %d, avg qlen %f\n", cap0->no, cap_unbounded_rq_len, cap0->avg_run_queue_len);
+	    traceUserMsg(cap, &temp_str[0]);
+#endif
+	    num_to_move = trunc((cap->avg_run_queue_len - cap0->avg_run_queue_len) / 2.0);
 	    if (!emptyRunQueue(cap0)
-		|| (cap->avg_run_queue_len - cap0->avg_run_queue_len) < 2
+		|| abs(num_to_move) < 1 //cap->avg_run_queue_len - cap0->avg_run_queue_len) < 1.25
                 || cap0->returning_tasks_hd != NULL
                 || cap0->inbox != (Message*)END_TSO_QUEUE) {
 		// it already has some work, we just grabbed it at 
@@ -759,9 +826,16 @@ schedulePushWork(Capability *cap USED_IF_THREADS,
 		releaseCapability(cap0);
 	    } else {
 	      free_caps[n_free_caps++] = cap0;
+	      break;
 	    }
 	}
     }
+    if (n_free_caps > 0) { 
+      exchange(cap, free_caps[0], num_to_move, task);
+      task->cap = free_caps[0];
+      releaseAndWakeupCapability(free_caps[0]);
+    }
+    task->cap = cap;
 
 
     // we now have n_free_caps free capabilities stashed in
@@ -775,94 +849,95 @@ schedulePushWork(Capability *cap USED_IF_THREADS,
     //
     //   - giving low priority to moving long-lived threads
 
-    if (n_free_caps > 0) {
-	StgTSO *prev, *t, *next;
-#ifdef SPARK_PUSHING
-	rtsBool pushed_to_all;
-#endif
+/*     if (n_free_caps > 0) { */
+/* 	StgTSO *prev, *t, *next; */
+/* #ifdef SPARK_PUSHING */
+/* 	rtsBool pushed_to_all; */
+/* #endif */
 
-	debugTrace(DEBUG_sched, 
-		   "cap %d: %s and %d free capabilities, sharing...", 
-		   cap->no, 
-		   (!emptyRunQueue(cap) && cap->run_queue_hd->_link != END_TSO_QUEUE)?
-		   "excess threads on run queue":"sparks to share (>=2)",
-		   n_free_caps);
+/* 	debugTrace(DEBUG_sched,  */
+/* 		   "cap %d: %s and %d free capabilities, sharing...",  */
+/* 		   cap->no,  */
+/* 		   (!emptyRunQueue(cap) && cap->run_queue_hd->_link != END_TSO_QUEUE)? */
+/* 		   "excess threads on run queue":"sparks to share (>=2)", */
+/* 		   n_free_caps); */
 
-	i = 0;
-#ifdef SPARK_PUSHING
-	pushed_to_all = rtsFalse;
-#endif
+/* 	i = 0; */
+/* #ifdef SPARK_PUSHING */
+/* 	pushed_to_all = rtsFalse; */
+/* #endif */
 
-	if (cap->run_queue_hd != END_TSO_QUEUE) {
-	    prev = cap->run_queue_hd;
-	    t = prev->_link;
-	    prev->_link = END_TSO_QUEUE;
-	    for (; t != END_TSO_QUEUE; t = next) {
-		next = t->_link;
-		t->_link = END_TSO_QUEUE;
-                if (t->bound == task->incall // don't move my bound thread
-		    || tsoLocked(t)) {  // don't move a locked thread
-		    setTSOLink(cap, prev, t);
-                    setTSOPrev(cap, t, prev);
-		    prev = t;
-		} else if (i == n_free_caps) {
-#ifdef SPARK_PUSHING
-		    pushed_to_all = rtsTrue;
-#endif
-		    i = 0;
-		    // keep one for us
-		    setTSOLink(cap, prev, t);
-                    setTSOPrev(cap, t, prev);
-		    prev = t;
-		} else {
-		    appendToRunQueue(free_caps[i],t);
+/* 	if (cap->run_queue_hd != END_TSO_QUEUE) { */
+/* 	    prev = cap->run_queue_hd; */
+/* 	    t = prev->_link; */
+/* 	    prev->_link = END_TSO_QUEUE; */
+/* 	    for (; t != END_TSO_QUEUE; t = next) { */
+/* 		next = t->_link; */
+/* 		t->_link = END_TSO_QUEUE; */
+/*                 if (t->bound == task->incall // don't move my bound thread */
+/* 		    || tsoLocked(t)) {  // don't move a locked thread */
+/* 		    setTSOLink(cap, prev, t); */
+/*                     setTSOPrev(cap, t, prev); */
+/* 		    prev = t; */
+/* 		} else if (i == n_free_caps) { */
+/* #ifdef SPARK_PUSHING */
+/* 		    pushed_to_all = rtsTrue; */
+/* #endif */
+/* 		    i = 0; */
+/* 		    // keep one for us */
+/* 		    setTSOLink(cap, prev, t); */
+/*                     setTSOPrev(cap, t, prev); */
+/* 		    prev = t; */
+/* 		} else { */
+/* 		    appendToRunQueue(free_caps[i],t); */
 
-                    traceEventMigrateThread (cap, t, free_caps[i]->no);
+/*                     traceEventMigrateThread (cap, t, free_caps[i]->no); */
 
-		    if (t->bound) { t->bound->task->cap = free_caps[i]; }
-		    t->cap = free_caps[i];
-		    i++;
-		}
-	    }
-	    cap->run_queue_tl = prev;
+/* 		    if (t->bound) { t->bound->task->cap = free_caps[i]; } */
+/* 		    t->cap = free_caps[i]; */
+/* 		    i++; */
+/* 		} */
+/* 	    } */
+/* 	    cap->run_queue_tl = prev; */
 
-            IF_DEBUG(sanity, checkRunQueue(cap));
-	}
+/*             IF_DEBUG(sanity, checkRunQueue(cap)); */
+/* 	} */
 
-#ifdef SPARK_PUSHING
-	/* JB I left this code in place, it would work but is not necessary */
+/* #ifdef SPARK_PUSHING */
+/* 	/\* JB I left this code in place, it would work but is not necessary *\/ */
 
-	// If there are some free capabilities that we didn't push any
-	// threads to, then try to push a spark to each one.
-	if (!pushed_to_all) {
-	    StgClosure *spark;
-	    // i is the next free capability to push to
-	    for (; i < n_free_caps; i++) {
-		if (emptySparkPoolCap(free_caps[i])) {
-		    spark = tryStealSpark(cap->sparks);
-		    if (spark != NULL) {
-                        /* TODO: if anyone wants to re-enable this code then
-                         * they must consider the fizzledSpark(spark) case
-                         * and update the per-cap spark statistics.
-                         */
-			debugTrace(DEBUG_sched, "pushing spark %p to capability %d", spark, free_caps[i]->no);
+/* 	// If there are some free capabilities that we didn't push any */
+/* 	// threads to, then try to push a spark to each one. */
+/* 	if (!pushed_to_all) { */
+/* 	    StgClosure *spark; */
+/* 	    // i is the next free capability to push to */
+/* 	    for (; i < n_free_caps; i++) { */
+/* 		if (emptySparkPoolCap(free_caps[i])) { */
+/* 		    spark = tryStealSpark(cap->sparks); */
+/* 		    if (spark != NULL) { */
+/*                         /\* TODO: if anyone wants to re-enable this code then */
+/*                          * they must consider the fizzledSpark(spark) case */
+/*                          * and update the per-cap spark statistics. */
+/*                          *\/ */
+/* 			debugTrace(DEBUG_sched, "pushing spark %p to capability %d", spark, free_caps[i]->no); */
 
-            traceEventStealSpark(free_caps[i], t, cap->no);
+/*             traceEventStealSpark(free_caps[i], t, cap->no); */
 
-			newSpark(&(free_caps[i]->r), spark);
-		    }
-		}
-	    }
-	}
-#endif /* SPARK_PUSHING */
+/* 			newSpark(&(free_caps[i]->r), spark); */
+/* 		    } */
+/* 		} */
+/* 	    } */
+/* 	} */
+/* #endif /\* SPARK_PUSHING *\/ */
+
 
 	// release the capabilities
-	for (i = 0; i < n_free_caps; i++) {
-	    task->cap = free_caps[i];
-	    releaseAndWakeupCapability(free_caps[i]);
-	}
-    }
-    task->cap = cap; // reset to point to our Capability.
+	/* for (i = 0; i < n_free_caps; i++) { */
+	/*     task->cap = free_caps[i]; */
+	/*     releaseAndWakeupCapability(free_caps[i]); */
+	/* } */
+    //}
+    //task->cap = cap; // reset to point to our Capability.
 
 #endif /* THREADED_RTS */
 
