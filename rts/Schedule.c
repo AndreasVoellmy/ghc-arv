@@ -816,7 +816,7 @@ schedulePushWork(Capability *cap USED_IF_THREADS,
 	    snprintf(&temp_str[0], 200, "cap0 %d qlen %d, avg qlen %f\n", cap0->no, cap_unbounded_rq_len, cap0->avg_run_queue_len);
 	    traceUserMsg(cap, &temp_str[0]);
 #endif
-	    num_to_move = trunc((cap->avg_run_queue_len - cap0->avg_run_queue_len) / 2.0);
+	    num_to_move = round((cap->avg_run_queue_len - cap0->avg_run_queue_len) / 2.0);
 	    if (!emptyRunQueue(cap0)
 		|| abs(num_to_move) < 1 //cap->avg_run_queue_len - cap0->avg_run_queue_len) < 1.25
                 || cap0->returning_tasks_hd != NULL
