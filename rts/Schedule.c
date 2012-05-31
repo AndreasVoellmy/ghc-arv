@@ -680,9 +680,9 @@ unLockedRunQueueLength(Capability *cap);
 
 inline int
 unLockedRunQueueLength(Capability *cap) {
-  int i = 0;
-  StgTSO *tso = cap->run_queue_hd;
-  for (tso = cap->run_queue_hd; tso != END_TSO_QUEUE; tso = tso->_link) {
+  int i;
+  StgTSO *tso;
+  for (i=0,tso = cap->run_queue_hd; tso != END_TSO_QUEUE; tso = tso->_link) {
     if (!tsoLocked(tso)) {
       i++;
     }
@@ -754,6 +754,8 @@ updateRunningAverage(Capability *cap)
   cap->avg_run_queue_len = ((1-SMOOTHING_FACTOR) * cap->avg_run_queue_len + SMOOTHING_FACTOR * ((double) len));
   return len;
 }
+
+
 #endif
 
 static void
@@ -811,9 +813,9 @@ schedulePushWork(Capability *cap USED_IF_THREADS,
 	  // In fact it is important that we do so, 
 	  // since if it has no work to do, 
 	  // it won't update its own count.
-	    cap_unbounded_rq_len = updateRunningAverage(cap0);
+	    updateRunningAverage(cap0);
 #ifdef TRACING
-	    snprintf(&temp_str[0], 200, "cap0 %d qlen %d, avg qlen %f\n", cap0->no, cap_unbounded_rq_len, cap0->avg_run_queue_len);
+	    snprintf(&temp_str[0], 200, "cap0 %d qlen %d, avg qlen %f\n", cap0->no, 0, cap0->avg_run_queue_len);
 	    traceUserMsg(cap, &temp_str[0]);
 #endif
 	    num_to_move = round((cap->avg_run_queue_len - cap0->avg_run_queue_len) / 2.0);
