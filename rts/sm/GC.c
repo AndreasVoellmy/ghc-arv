@@ -389,8 +389,24 @@ GarbageCollect (rtsBool force_major_gc,
       // If we get to here, there's really nothing left to do.
       break;
   }
+  // Clear the nursery for this thread's cap.
+  allocated += clearNursery(cap);
 
+  // Shutdown will wait for all gcthreads to clear their nurseries as well,
+  // each will fill the allocated member of its gc_thread_ struct in the 
+  // gc_threads array.
   shutdown_gc_threads(gct->thread_index);
+
+  // Grab allocated numbers from other gcthreads via.
+  if (n_gc_threads != 1) {
+    nat i;
+    for (i=0; i < n_gc_threads; i++) {
+      if (i != gct->thread_index) {
+	allocated += gc_threads[i]->allocated;
+      }
+    }
+  }
+
 
   // Now see which stable names are still alive.
   gcStablePtrTable();
@@ -596,7 +612,7 @@ GarbageCollect (rtsBool force_major_gc,
 
   // update the max size of older generations after a major GC
   resize_generations();
-  
+
   // Free the mark stack.
   if (mark_stack_top_bd != NULL) {
       debugTrace(DEBUG_gc, "mark stack: %d blocks",
@@ -613,9 +629,10 @@ GarbageCollect (rtsBool force_major_gc,
       }
   }
 
-  // Reset the nursery: make the blocks empty
-  allocated += clearNurseries();
 
+  // Sanity check nursery reset; clearNursery() performed 
+  // by each gcthread now does this in the normal case.
+  IF_DEBUG(sanity, clearNurseries());
   resize_nursery();
 
   resetNurseries();
@@ -1071,6 +1088,8 @@ gcWorkerThread (Capability *cap)
 
     scavenge_until_all_done();
     
+    gct->allocated = clearNursery(cap);
+
 #ifdef THREADED_RTS
     // Now that the whole heap is marked, we discard any sparks that
     // were found to be unreachable.  The main GC thread is currently
@@ -1422,6 +1441,7 @@ init_gc_thread (gc_thread *t)
     t->any_work = 0;
     t->no_work = 0;
     t->scav_find_work = 0;
+    t->allocated = 0;
 }
 
 /* -----------------------------------------------------------------------------

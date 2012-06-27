@@ -171,7 +171,7 @@ typedef struct gc_thread_ {
 #ifdef USE_PAPI
     int papi_events;
 #endif
-
+    lnat allocated;
     // -------------------
     // stats
 
