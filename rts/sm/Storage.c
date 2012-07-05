@@ -507,13 +507,17 @@ clearNursery (Capability *cap)
 {
     lnat allocated = 0;
     bdescr *bd;
+    lnat allocThisBlock;
 
     for (bd = nurseries[cap->no].blocks; bd; bd = bd->link) {
-      allocated += (lnat)(bd->free - bd->start);
+      allocThisBlock = (lnat)(bd->free - bd->start);
+      allocated += allocThisBlock;
       bd->free = bd->start;
       ASSERT(bd->gen_no == 0);
       ASSERT(bd->gen == g0);
+      if (!allocThisBlock) break;
     }
+
     return allocated;
 }
 
