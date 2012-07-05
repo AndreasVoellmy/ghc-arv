@@ -243,6 +243,21 @@ getNumberOfProcessors (void)
 void
 setThreadAffinity (nat n, nat m)
 {
+    cpu_set_t cs;
+    nat socket, coreInSocket, cpu;
+
+    socket = n % 8;
+    coreInSocket = n / 8;
+    cpu = 10 * socket + coreInSocket + 2;
+    // e.g. 0 -> 0, 1 -> 10, 2 -> 20, ..., 8 -> 1, 9 -> 11, ...
+    CPU_ZERO(&cs);
+    CPU_SET(cpu, &cs);
+    sched_setaffinity(0, sizeof(cpu_set_t), &cs);
+}
+/*
+void
+setThreadAffinity (nat n, nat m)
+{
     nat nproc;
     cpu_set_t cs;
     nat i;
@@ -254,7 +269,7 @@ setThreadAffinity (nat n, nat m)
     }
     sched_setaffinity(0, sizeof(cpu_set_t), &cs);
 }
-
+*/
 #elif defined(darwin_HOST_OS) && defined(THREAD_AFFINITY_POLICY)
 // Schedules the current thread in the affinity set identified by tag n.
 void
