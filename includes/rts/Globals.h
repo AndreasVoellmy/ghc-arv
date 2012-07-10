@@ -23,5 +23,7 @@ StgStablePtr getOrSetGHCConcWindowsIOManagerThreadStore(StgStablePtr ptr);
 StgStablePtr getOrSetGHCConcWindowsProddingStore(StgStablePtr ptr);
 StgStablePtr getOrSetSystemEventThreadEventManagerStore(StgStablePtr ptr);
 StgStablePtr getOrSetSystemEventThreadIOManagerThreadStore(StgStablePtr ptr);
+StgStablePtr getOrSetSystemEventThreadEventManagerLock(StgStablePtr ptr);
+StgStablePtr getOrSetSystemEventThreadIOManagerArray(StgStablePtr ptr);
 
 #endif /* RTS_GLOBALS_H */

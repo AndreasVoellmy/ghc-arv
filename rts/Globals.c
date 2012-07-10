@@ -25,6 +25,8 @@ typedef enum {
     GHCConcWindowsProddingStore,
     SystemEventThreadEventManagerStore,
     SystemEventThreadIOManagerThreadStore,
+    SystemEventThreadEventManagerLock,
+    SystemEventThreadIOManagerArray,
     MaxStoreKey
 } StoreKey;
 
@@ -113,4 +115,16 @@ StgStablePtr
 getOrSetSystemEventThreadIOManagerThreadStore(StgStablePtr ptr)
 {
     return getOrSetKey(SystemEventThreadIOManagerThreadStore,ptr);
+}
+
+StgStablePtr
+getOrSetSystemEventThreadEventManagerLock(StgStablePtr ptr)
+{
+    return getOrSetKey(SystemEventThreadEventManagerLock,ptr);
+}
+
+StgStablePtr
+getOrSetSystemEventThreadIOManagerArray(StgStablePtr ptr)
+{
+    return getOrSetKey(SystemEventThreadIOManagerArray,ptr);
 }
