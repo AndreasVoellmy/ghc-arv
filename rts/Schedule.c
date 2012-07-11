@@ -1183,7 +1183,7 @@ scheduleHandleYield( Capability *cap, StgTSO *t, nat prev_what_next )
         cap->context_switch = 0;
         appendToRunQueue(cap,t);
     } else {
-      appendToRunQueue(cap,t); // pushOnRunQueue(cap,t);
+      pushOnRunQueue(cap,t);
     }
 
     IF_DEBUG(sanity,
